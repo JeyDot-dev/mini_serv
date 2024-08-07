@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
 #include <netdb.h>
@@ -8,11 +7,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-t_client        *g_clients = NULL;
-int             g_server_fd = -1;
-int             g_max_fd = -2;
-fd_set          g_write_set, g_read_set, g_origin_set;
-int             g_id = 0;
 typedef struct  s_client
 {
   int             id;
@@ -20,8 +14,13 @@ typedef struct  s_client
   struct s_client *next;
 }                t_client;
 
+t_client        *g_clients = NULL;
+int             g_server_fd = -1;
+int             g_max_fd = -2;
+int             g_id = 0;
+fd_set          g_write_set, g_read_set, g_origin_set;
 
-void  fatal_error()
+void  fatal_error(void)
 {
   if (g_server_fd > 0)
     close(g_server_fd);
@@ -46,10 +45,10 @@ int add_client(int client_fd)
   new_client->fd = client_fd;
   new_client->id = g_id++;
   new_client->next = g_clients;
+  g_clients = new_client;
   FD_SET(client_fd, &g_origin_set);
   if (new_client->fd > g_max_fd)
     g_max_fd = new_client->fd;
-  g_clients = new_client;
   return 0;
 }
 
@@ -87,8 +86,26 @@ void  send_all(int fd, char *msg)
   }
 
 }
+/*
+NOTE: More efficient version but longer
+  
+  void	send_all(int fd, char* msg)
+  {
+    t_client  *tmp;
+    tmp = g_clients;
+    while (tmp)
+    {
+      if (FD_ISSET(tmp->fd, &g_write_set) && tmp->fd != fd)
+      {
+        if (send(tmp->fd, msg, strlen(msg), 0) == -1)
+          fatal_error();
+      }
+      tmp = tmp->next;
+    }
+  }
+*/
 
-void  broadcast(int fd, char* msg, bool is_serv)
+void  broadcast(int fd, char* msg, int is_serv)
 {
 
   if (is_serv)
@@ -122,20 +139,17 @@ int main(int ac, char **av)
   if (g_server_fd == -1)
     fatal_error();
 
-  FD_SET(g_server_fd, &g_origin_set);
-  g_max_fd = g_server_fd;
-
   servaddr.sin_family = AF_INET; 
   servaddr.sin_addr.s_addr = htonl(2130706433);
   servaddr.sin_port = htons(atoi(av[1])); 
 
-  if ((bind(g_server_fd, (const struct sockaddr *)&servaddr, sizeof(servaddr))) != 0)
-    fatal_error();
-  if (listen(g_server_fd, 10) != 0)
+  if ((bind(g_server_fd, (const struct sockaddr *)&servaddr, sizeof(servaddr))) != 0 || listen(g_server_fd, 10) != 0)
     fatal_error();
 
+  FD_SET(g_server_fd, &g_origin_set);
+  g_max_fd = g_server_fd;
   sockaddrlen = sizeof(servaddr);
-  while (true)
+  while (1)
   {
     g_read_set = g_write_set = g_origin_set;
     if (select(g_max_fd + 1, &g_read_set, &g_write_set, 0, 0) == -1)
@@ -145,7 +159,7 @@ int main(int ac, char **av)
       if (add_client(accept(g_server_fd, (struct sockaddr *)&servaddr, &sockaddrlen)) != 0)
         continue;
       sprintf(send_buffer, "client %d just arrived\n", g_clients->id);
-      broadcast(g_clients->id, send_buffer, true);
+      broadcast(g_clients->id, send_buffer, 1);
     }
     current_client = g_clients;
     while (current_client)
@@ -158,13 +172,13 @@ int main(int ac, char **av)
         {
           remove_client(current_client->fd);
           sprintf(send_buffer, "client %d just left\n", current_client->fd);
-          broadcast(-1, send_buffer, true);
+          broadcast(-1, send_buffer, 1);
         }
         else
-      {
+        {
           recv_buffer[bytes_read] = 0;
           sprintf(send_buffer, "client %d: %s", current_client->id, recv_buffer);
-          broadcast(current_client->fd, send_buffer, false);
+          broadcast(current_client->fd, send_buffer, 0);
         }
       }
       current_client = next_client;
